@@ -18,27 +18,43 @@ import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 
+// Ditampilkan saat sesi login yang tersimpan masih dicek (misalnya setelah refresh),
+// supaya pengguna yang sudah login tidak sempat dilempar ke halaman login.
+const FullScreenLoader = () => (
+  <div className="min-h-screen flex items-center justify-center bg-background">
+    <span className="h-8 w-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" />
+  </div>
+);
+
 const ProtectedRoute = ({ children, allowedRoles }: { children: React.ReactNode; allowedRoles?: ('admin' | 'manajer')[] }) => {
-  const { isAuthenticated, user } = useAuth();
-  
+  const { isAuthenticated, isLoading, user } = useAuth();
+
+  if (isLoading) {
+    return <FullScreenLoader />;
+  }
+
   if (!isAuthenticated) {
     return <Navigate to="/" replace />;
   }
-  
+
   if (allowedRoles && user?.role && !allowedRoles.includes(user.role)) {
     return <Navigate to="/dashboard" replace />;
   }
-  
+
   return <>{children}</>;
 };
 
 const PublicRoute = ({ children }: { children: React.ReactNode }) => {
-  const { isAuthenticated } = useAuth();
-  
+  const { isAuthenticated, isLoading } = useAuth();
+
+  if (isLoading) {
+    return <FullScreenLoader />;
+  }
+
   if (isAuthenticated) {
     return <Navigate to="/dashboard" replace />;
   }
-  
+
   return <>{children}</>;
 };
 

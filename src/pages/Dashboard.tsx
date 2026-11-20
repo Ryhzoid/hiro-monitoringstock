@@ -3,18 +3,19 @@ import { useData } from '@/contexts/DataContext';
 import { getStokAkhir, getStokStatus } from '@/data/dummyData';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Package, ShoppingCart, AlertTriangle, ArrowDownToLine, FileText, Clock } from 'lucide-react';
+import { Package, ShoppingCart, AlertTriangle, ArrowDownToLine, ArrowUpFromLine, Clock } from 'lucide-react';
+import { todayLocal } from '@/lib/date';
 
-const StatCard = ({ 
-  title, 
-  value, 
-  icon: Icon, 
-  description, 
-  variant = 'default' 
-}: { 
-  title: string; 
-  value: string | number; 
-  icon: React.ElementType; 
+const StatCard = ({
+  title,
+  value,
+  icon: Icon,
+  description,
+  variant = 'default'
+}: {
+  title: string;
+  value: string | number;
+  icon: React.ElementType;
   description: string;
   variant?: 'default' | 'warning' | 'success';
 }) => (
@@ -24,8 +25,8 @@ const StatCard = ({
     <CardHeader className="flex flex-row items-center justify-between pb-2">
       <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
       <div className={`p-2 rounded-lg ${
-        variant === 'warning' 
-          ? 'bg-[hsl(var(--warning))]/10 text-[hsl(var(--warning))]' 
+        variant === 'warning'
+          ? 'bg-[hsl(var(--warning))]/10 text-[hsl(var(--warning))]'
           : 'bg-primary/10 text-primary'
       }`}>
         <Icon className="h-4 w-4" />
@@ -45,14 +46,17 @@ const StatCard = ({
 const Dashboard = () => {
   const { user } = useAuth();
   const { products, transactions } = useData();
-  
-  const today = new Date().toISOString().split('T')[0];
-  const currentMonth = new Date().toISOString().slice(0, 7);
-  
+
+  // Semua tanggal memakai jam lokal perangkat (bukan UTC), supaya di WIB tidak
+  // mundur sehari atau salah bulan pada dini hari.
+  const today = todayLocal();
+  const currentMonth = today.slice(0, 7);
+
   const todayTransactions = transactions.filter(t => t.tanggal === today);
   const monthTransactions = transactions.filter(t => t.tanggal.startsWith(currentMonth));
   const todayMasuk = todayTransactions.filter(t => t.jenis === 'Masuk');
-  
+  const monthKeluar = monthTransactions.filter(t => t.jenis === 'Keluar');
+
   const lowStockProducts = products.filter(p => {
     const stokAkhir = getStokAkhir(p);
     return getStokStatus(stokAkhir) === 'Menipis' || getStokStatus(stokAkhir) === 'Habis';
@@ -69,7 +73,7 @@ const Dashboard = () => {
             Selamat Datang, {user?.nama}!
           </h1>
           <p className="text-muted-foreground">
-            {isAdmin 
+            {isAdmin
               ? 'Kelola stok gudang dan transaksi barang dengan mudah.'
               : 'Pantau stok gudang dan laporan transaksi dengan mudah.'
             }
@@ -78,29 +82,29 @@ const Dashboard = () => {
 
         {/* Stats Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard 
+          <StatCard
             title="Total Barang"
             value={products.length}
             icon={Package}
             description="Jenis produk terdaftar"
           />
-          
+
           {isAdmin ? (
             <>
-              <StatCard 
+              <StatCard
                 title="Transaksi Hari Ini"
                 value={todayTransactions.length}
                 icon={ShoppingCart}
                 description={`${today}`}
               />
-              <StatCard 
+              <StatCard
                 title="Stok Menipis"
                 value={lowStockProducts.length}
                 icon={AlertTriangle}
                 description="Perlu restok segera"
                 variant={lowStockProducts.length > 0 ? 'warning' : 'default'}
               />
-              <StatCard 
+              <StatCard
                 title="Barang Masuk Hari Ini"
                 value={todayMasuk.length}
                 icon={ArrowDownToLine}
@@ -109,24 +113,24 @@ const Dashboard = () => {
             </>
           ) : (
             <>
-              <StatCard 
+              <StatCard
                 title="Transaksi Bulan Ini"
                 value={monthTransactions.length}
                 icon={ShoppingCart}
                 description={`Periode ${currentMonth}`}
               />
-              <StatCard 
+              <StatCard
                 title="Stok Menipis"
                 value={lowStockProducts.length}
                 icon={AlertTriangle}
                 description="Perlu restok segera"
                 variant={lowStockProducts.length > 0 ? 'warning' : 'default'}
               />
-              <StatCard 
-                title="Laporan Pending"
-                value={3}
-                icon={FileText}
-                description="Menunggu review"
+              <StatCard
+                title="Barang Keluar Bulan Ini"
+                value={monthKeluar.length}
+                icon={ArrowUpFromLine}
+                description="Transaksi keluar"
               />
             </>
           )}
@@ -154,8 +158,8 @@ const Dashboard = () => {
                     const stokAkhir = getStokAkhir(product);
                     const status = getStokStatus(stokAkhir);
                     return (
-                      <div 
-                        key={product.id} 
+                      <div
+                        key={product.id}
                         className="flex items-center justify-between p-3 rounded-lg bg-muted/50"
                       >
                         <div>
@@ -163,8 +167,8 @@ const Dashboard = () => {
                           <p className="text-xs text-muted-foreground">{product.kode}</p>
                         </div>
                         <span className={`px-2 py-1 text-xs font-medium rounded-full ${
-                          status === 'Habis' 
-                            ? 'bg-destructive/10 text-destructive' 
+                          status === 'Habis'
+                            ? 'bg-destructive/10 text-destructive'
                             : 'bg-[hsl(var(--warning))]/10 text-[hsl(var(--warning))]'
                         }`}>
                           Stok: {stokAkhir}
@@ -187,31 +191,37 @@ const Dashboard = () => {
               <CardDescription>5 transaksi terakhir</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="space-y-3">
-                {transactions.slice(0, 5).map((transaction) => (
-                  <div 
-                    key={transaction.id} 
-                    className="flex items-center justify-between p-3 rounded-lg bg-muted/50"
-                  >
-                    <div className="flex items-center gap-3">
-                      <span className={`px-2 py-1 text-xs font-medium rounded-full ${
-                        transaction.jenis === 'Masuk'
-                          ? 'bg-[hsl(var(--success))]/10 text-[hsl(var(--success))]'
-                          : 'bg-[hsl(var(--info))]/10 text-[hsl(var(--info))]'
-                      }`}>
-                        {transaction.jenis}
-                      </span>
-                      <div>
-                        <p className="font-medium text-sm">{transaction.namaBarang}</p>
-                        <p className="text-xs text-muted-foreground">{transaction.tanggal}</p>
+              {transactions.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-4">
+                  Belum ada transaksi
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {transactions.slice(0, 5).map((transaction) => (
+                    <div
+                      key={transaction.id}
+                      className="flex items-center justify-between p-3 rounded-lg bg-muted/50"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                          transaction.jenis === 'Masuk'
+                            ? 'bg-[hsl(var(--success))]/10 text-[hsl(var(--success))]'
+                            : 'bg-[hsl(var(--info))]/10 text-[hsl(var(--info))]'
+                        }`}>
+                          {transaction.jenis}
+                        </span>
+                        <div>
+                          <p className="font-medium text-sm">{transaction.namaBarang}</p>
+                          <p className="text-xs text-muted-foreground">{transaction.tanggal}</p>
+                        </div>
                       </div>
+                      <span className="font-semibold text-sm">
+                        {transaction.jenis === 'Masuk' ? '+' : '-'}{transaction.jumlah}
+                      </span>
                     </div>
-                    <span className="font-semibold text-sm">
-                      {transaction.jenis === 'Masuk' ? '+' : '-'}{transaction.jumlah}
-                    </span>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>

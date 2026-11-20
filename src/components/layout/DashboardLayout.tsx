@@ -1,6 +1,7 @@
 import { ReactNode, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
+import { useData } from '@/contexts/DataContext';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -65,16 +66,17 @@ export const DashboardLayout = ({
     user,
     logout
   } = useAuth();
+  const { isLoading, error, refresh } = useData();
   const navigate = useNavigate();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const filteredMenuItems = menuItems.filter(item => user?.role && item.roles.includes(user.role));
-  
-  const handleLogout = () => {
-    logout();
+
+  const handleLogout = async () => {
+    await logout();
     navigate('/');
   };
-  
+
   return <div className="min-h-screen flex bg-background">
       {/* Mobile overlay */}
       {sidebarOpen && <div className="fixed inset-0 bg-foreground/20 backdrop-blur-sm z-40 lg:hidden" onClick={() => setSidebarOpen(false)} />}
@@ -100,16 +102,16 @@ export const DashboardLayout = ({
           {filteredMenuItems.map(item => {
             const Icon = item.icon;
             const isActive = location.pathname === item.path;
-            return <button 
-              key={item.path} 
+            return <button
+              key={item.path}
               onClick={() => {
                 navigate(item.path);
                 setSidebarOpen(false);
-              }} 
+              }}
               className={cn(
                 "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200",
-                isActive 
-                  ? "bg-lime-500 text-white shadow-md" 
+                isActive
+                  ? "bg-lime-500 text-white shadow-md"
                   : "text-gray-300 hover:bg-gray-700 hover:text-white"
               )}>
                 <Icon className="h-5 w-5" />
@@ -131,9 +133,9 @@ export const DashboardLayout = ({
               <p className="text-xs truncate text-gray-400">{user?.email}</p>
             </div>
           </div>
-          <Button 
-            variant="outline" 
-            className="w-full border-red-600 text-red-500 hover:bg-red-600 hover:text-white hover:border-red-600" 
+          <Button
+            variant="outline"
+            className="w-full border-red-600 text-red-500 hover:bg-red-600 hover:text-white hover:border-red-600"
             onClick={handleLogout}
           >
             <LogOut className="h-4 w-4 mr-2" />
@@ -149,7 +151,7 @@ export const DashboardLayout = ({
           <button className="lg:hidden p-2 hover:bg-muted rounded-lg" onClick={() => setSidebarOpen(!sidebarOpen)}>
             {sidebarOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
           </button>
-          
+
           <div className="flex-1 lg:flex-none">
             <h2 className="text-lg font-semibold text-foreground hidden lg:block">
               {filteredMenuItems.find(item => item.path === location.pathname)?.label || 'Dashboard'}
@@ -168,7 +170,19 @@ export const DashboardLayout = ({
 
         {/* Page content */}
         <main className="flex-1 p-4 lg:p-6 overflow-auto">
-          {children}
+          {isLoading ? (
+            <div className="flex items-center justify-center py-20">
+              <span className="h-8 w-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" />
+            </div>
+          ) : error ? (
+            <div className="max-w-md mx-auto text-center py-20 space-y-4">
+              <p className="font-medium text-destructive">Gagal memuat data</p>
+              <p className="text-sm text-muted-foreground">{error}</p>
+              <Button onClick={() => refresh()}>Coba Lagi</Button>
+            </div>
+          ) : (
+            children
+          )}
         </main>
       </div>
     </div>;

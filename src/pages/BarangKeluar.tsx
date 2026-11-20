@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { useData } from '@/contexts/DataContext';
-import { useAuth } from '@/contexts/AuthContext';
 import { getStokAkhir, sortBatchesByTanggal } from '@/data/dummyData';
+import { todayLocal } from '@/lib/date';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -14,18 +14,17 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from '@/hooks/use-toast';
 import { ArrowUpFromLine, Calendar, Package, Hash, FileText, AlertTriangle, Layers } from 'lucide-react';
 
+const emptyForm = () => ({
+  barangId: '',
+  jumlah: '',
+  tanggal: todayLocal(),
+  keterangan: '',
+});
+
 const BarangKeluar = () => {
   const { products, batches, addTransaction } = useData();
-  const { user } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
-
-  const [formData, setFormData] = useState({
-    barangId: '',
-    jumlah: '',
-    tanggal: new Date().toISOString().split('T')[0],
-    keterangan: '',
-  });
-
+  const [formData, setFormData] = useState(emptyForm());
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [stockWarning, setStockWarning] = useState<string | null>(null);
   const [batchAllocations, setBatchAllocations] = useState<Record<string, number>>({});
@@ -47,7 +46,7 @@ const BarangKeluar = () => {
 
   const validate = () => {
     const newErrors: Record<string, string> = {};
-    
+
     if (!formData.barangId) {
       newErrors.barangId = 'Pilih barang terlebih dahulu';
     }
@@ -82,9 +81,16 @@ const BarangKeluar = () => {
     return Object.keys(newErrors).length === 0;
   };
 
+  const resetAll = () => {
+    setFormData(emptyForm());
+    setErrors({});
+    setStockWarning(null);
+    setBatchAllocations({});
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!validate()) return;
 
     const requestedQty = parseInt(formData.jumlah);
@@ -97,51 +103,37 @@ const BarangKeluar = () => {
       return;
     }
 
-    setIsLoading(true);
-    await new Promise(resolve => setTimeout(resolve, 800));
-
+    const namaBarang = selectedProduct?.nama;
     const batchAllocationsPayload = Object.entries(batchAllocations)
       .filter(([, jumlah]) => jumlah > 0)
       .map(([batchId, jumlah]) => ({ batchId, jumlah }));
 
-    addTransaction({
-      tanggal: formData.tanggal,
-      jenis: 'Keluar',
-      barangId: formData.barangId,
-      namaBarang: selectedProduct?.nama || '',
-      jumlah: requestedQty,
-      keterangan: formData.keterangan || 'Barang keluar',
-      userInput: user?.nama || 'Admin',
-      batchAllocations: batchAllocationsPayload,
-    });
+    setIsLoading(true);
+    try {
+      await addTransaction({
+        tanggal: formData.tanggal,
+        jenis: 'Keluar',
+        barangId: formData.barangId,
+        jumlah: requestedQty,
+        keterangan: formData.keterangan || 'Barang keluar',
+        batchAllocations: batchAllocationsPayload,
+      });
 
-    toast({
-      title: 'Berhasil!',
-      description: `${selectedProduct?.nama} sebanyak ${formData.jumlah} unit berhasil dikeluarkan dari stok.`,
-    });
+      toast({
+        title: 'Berhasil!',
+        description: `${namaBarang} sebanyak ${requestedQty} unit berhasil dikeluarkan dari stok.`,
+      });
 
-    setFormData({
-      barangId: '',
-      jumlah: '',
-      tanggal: new Date().toISOString().split('T')[0],
-      keterangan: '',
-    });
-    setErrors({});
-    setStockWarning(null);
-    setBatchAllocations({});
-    setIsLoading(false);
-  };
-
-  const handleReset = () => {
-    setFormData({
-      barangId: '',
-      jumlah: '',
-      tanggal: new Date().toISOString().split('T')[0],
-      keterangan: '',
-    });
-    setErrors({});
-    setStockWarning(null);
-    setBatchAllocations({});
+      resetAll();
+    } catch (err: any) {
+      toast({
+        title: 'Gagal Menyimpan',
+        description: err?.message || 'Transaksi tidak dapat disimpan. Coba lagi.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -176,17 +168,23 @@ const BarangKeluar = () => {
                     <SelectValue placeholder="Cari dan pilih barang..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {activeProducts.map(product => {
-                      const stock = getStokAkhir(product);
-                      return (
-                        <SelectItem key={product.id} value={product.id}>
-                          <span className="font-medium">{product.kode}</span> - {product.nama}
-                          <span className={`ml-2 text-xs ${stock < 10 ? 'text-[hsl(var(--warning))]' : 'text-muted-foreground'}`}>
-                            (Stok: {stock})
-                          </span>
-                        </SelectItem>
-                      );
-                    })}
+                    {activeProducts.length === 0 ? (
+                      <div className="px-2 py-3 text-sm text-muted-foreground">
+                        Belum ada barang aktif.
+                      </div>
+                    ) : (
+                      activeProducts.map(product => {
+                        const stock = getStokAkhir(product);
+                        return (
+                          <SelectItem key={product.id} value={product.id}>
+                            <span className="font-medium">{product.kode}</span> - {product.nama}
+                            <span className={`ml-2 text-xs ${stock < 10 ? 'text-[hsl(var(--warning))]' : 'text-muted-foreground'}`}>
+                              (Stok: {stock})
+                            </span>
+                          </SelectItem>
+                        );
+                      })
+                    )}
                   </SelectContent>
                 </Select>
                 {errors.barangId && <p className="text-sm text-destructive">{errors.barangId}</p>}
@@ -327,7 +325,7 @@ const BarangKeluar = () => {
                     </>
                   )}
                 </Button>
-                <Button type="button" variant="outline" onClick={handleReset}>
+                <Button type="button" variant="outline" onClick={resetAll}>
                   Reset
                 </Button>
               </div>

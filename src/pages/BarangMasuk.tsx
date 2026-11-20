@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { useData } from '@/contexts/DataContext';
-import { useAuth } from '@/contexts/AuthContext';
+import { todayLocal } from '@/lib/date';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,25 +11,24 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { toast } from '@/hooks/use-toast';
 import { ArrowDownToLine, Calendar, Package, Hash, FileText } from 'lucide-react';
 
+const emptyForm = () => ({
+  barangId: '',
+  jumlah: '',
+  tanggal: todayLocal(),
+  keterangan: '',
+});
+
 const BarangMasuk = () => {
   const { products, addTransaction } = useData();
-  const { user } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
-
-  const [formData, setFormData] = useState({
-    barangId: '',
-    jumlah: '',
-    tanggal: new Date().toISOString().split('T')[0],
-    keterangan: '',
-  });
-
+  const [formData, setFormData] = useState(emptyForm());
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const activeProducts = products.filter(p => p.status === 'Aktif');
 
   const validate = () => {
     const newErrors: Record<string, string> = {};
-    
+
     if (!formData.barangId) {
       newErrors.barangId = 'Pilih barang terlebih dahulu';
     }
@@ -46,46 +45,42 @@ const BarangMasuk = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!validate()) return;
 
-    setIsLoading(true);
-    await new Promise(resolve => setTimeout(resolve, 800));
-
     const selectedProduct = products.find(p => p.id === formData.barangId);
-    
-    addTransaction({
-      tanggal: formData.tanggal,
-      jenis: 'Masuk',
-      barangId: formData.barangId,
-      namaBarang: selectedProduct?.nama || '',
-      jumlah: parseInt(formData.jumlah),
-      keterangan: formData.keterangan || 'Barang masuk',
-      userInput: user?.nama || 'Admin',
-    });
+    const jumlah = parseInt(formData.jumlah);
 
-    toast({
-      title: 'Berhasil!',
-      description: `${selectedProduct?.nama} sebanyak ${formData.jumlah} unit berhasil ditambahkan ke stok.`,
-    });
+    setIsLoading(true);
+    try {
+      await addTransaction({
+        tanggal: formData.tanggal,
+        jenis: 'Masuk',
+        barangId: formData.barangId,
+        jumlah,
+        keterangan: formData.keterangan || 'Barang masuk',
+      });
 
-    setFormData({
-      barangId: '',
-      jumlah: '',
-      tanggal: new Date().toISOString().split('T')[0],
-      keterangan: '',
-    });
-    setErrors({});
-    setIsLoading(false);
+      toast({
+        title: 'Berhasil!',
+        description: `${selectedProduct?.nama} sebanyak ${jumlah} ${selectedProduct?.satuan ?? 'unit'} berhasil ditambahkan ke stok.`,
+      });
+
+      setFormData(emptyForm());
+      setErrors({});
+    } catch (err: any) {
+      toast({
+        title: 'Gagal Menyimpan',
+        description: err?.message || 'Transaksi tidak dapat disimpan. Coba lagi.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleReset = () => {
-    setFormData({
-      barangId: '',
-      jumlah: '',
-      tanggal: new Date().toISOString().split('T')[0],
-      keterangan: '',
-    });
+    setFormData(emptyForm());
     setErrors({});
   };
 
@@ -117,11 +112,17 @@ const BarangMasuk = () => {
                     <SelectValue placeholder="Cari dan pilih barang..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {activeProducts.map(product => (
-                      <SelectItem key={product.id} value={product.id}>
-                        <span className="font-medium">{product.kode}</span> - {product.nama}
-                      </SelectItem>
-                    ))}
+                    {activeProducts.length === 0 ? (
+                      <div className="px-2 py-3 text-sm text-muted-foreground">
+                        Belum ada barang aktif. Tambahkan dulu di Kelola Data Barang.
+                      </div>
+                    ) : (
+                      activeProducts.map(product => (
+                        <SelectItem key={product.id} value={product.id}>
+                          <span className="font-medium">{product.kode}</span> - {product.nama}
+                        </SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
                 {errors.barangId && <p className="text-sm text-destructive">{errors.barangId}</p>}
