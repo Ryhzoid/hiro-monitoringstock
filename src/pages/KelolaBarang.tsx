@@ -8,6 +8,16 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/hooks/use-toast';
@@ -27,9 +37,10 @@ interface ProductFormProps {
   onSubmit: () => void;
   onCancel: () => void;
   submitLabel: string;
+  isSaving: boolean;
 }
 
-const ProductForm = ({ formData, setFormData, onSubmit, onCancel, submitLabel }: ProductFormProps) => (
+const ProductForm = ({ formData, setFormData, onSubmit, onCancel, submitLabel, isSaving }: ProductFormProps) => (
   <div className="space-y-4">
     <div className="grid grid-cols-2 gap-4">
       <div className="space-y-2">
@@ -82,21 +93,25 @@ const ProductForm = ({ formData, setFormData, onSubmit, onCancel, submitLabel }:
       </div>
     </div>
     <DialogFooter>
-      <Button variant="outline" onClick={onCancel}>
+      <Button variant="outline" onClick={onCancel} disabled={isSaving}>
         Batal
       </Button>
-      <Button onClick={onSubmit}>{submitLabel}</Button>
+      <Button onClick={onSubmit} disabled={isSaving}>
+        {isSaving ? 'Menyimpan...' : submitLabel}
+      </Button>
     </DialogFooter>
   </div>
 );
 
 const KelolaBarang = () => {
-  const { products, addProduct, updateProduct, deleteProduct } = useData();
+  const { products, transactions, addProduct, updateProduct, deleteProduct } = useData();
   const [searchTerm, setSearchTerm] = useState('');
   const [filterKategori, setFilterKategori] = useState('all');
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [productToDelete, setProductToDelete] = useState<Product | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
@@ -121,45 +136,110 @@ const KelolaBarang = () => {
     currentPage * itemsPerPage
   );
 
+  // Barang yang sudah punya riwayat transaksi tidak boleh dihapus (riwayat harus tetap utuh).
+  const deleteHasTransactions = productToDelete
+    ? transactions.some(t => t.barangId === productToDelete.id)
+    : false;
+
+  const isKodeTaken = (kode: string, excludeId?: string) =>
+    products.some(p => p.kode.trim().toLowerCase() === kode.trim().toLowerCase() && p.id !== excludeId);
+
+  const showError = (err: any, title = 'Gagal Menyimpan') => {
+    toast({
+      title,
+      description: err?.message || 'Terjadi kesalahan. Coba lagi.',
+      variant: 'destructive',
+    });
+  };
+
   const resetForm = () => {
     setFormData({ kode: '', nama: '', kategori: '', satuan: '', status: '' });
   };
 
-  const handleAdd = () => {
-    if (!formData.kode || !formData.nama || !formData.kategori || !formData.satuan || !formData.status) {
+  const handleAdd = async () => {
+    if (!formData.kode.trim() || !formData.nama.trim() || !formData.kategori || !formData.satuan || !formData.status) {
       toast({ title: 'Error', description: 'Mohon lengkapi semua field.', variant: 'destructive' });
       return;
     }
-    addProduct({
-      kode: formData.kode,
-      nama: formData.nama,
-      kategori: formData.kategori,
-      satuan: formData.satuan as 'PCS' | 'BOX' | 'UNIT',
-      status: formData.status as 'Aktif' | 'Tidak Aktif',
-    });
-    toast({ title: 'Berhasil', description: 'Barang berhasil ditambahkan.' });
-    resetForm();
-    setIsAddDialogOpen(false);
+    if (isKodeTaken(formData.kode)) {
+      toast({ title: 'Kode Sudah Dipakai', description: `Kode ${formData.kode.trim()} sudah digunakan barang lain.`, variant: 'destructive' });
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      await addProduct({
+        kode: formData.kode.trim(),
+        nama: formData.nama.trim(),
+        kategori: formData.kategori,
+        satuan: formData.satuan as 'PCS' | 'BOX' | 'UNIT',
+        status: formData.status as 'Aktif' | 'Tidak Aktif',
+      });
+      toast({ title: 'Berhasil', description: 'Barang berhasil ditambahkan.' });
+      resetForm();
+      setIsAddDialogOpen(false);
+    } catch (err) {
+      showError(err);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleEdit = () => {
+  const handleEdit = async () => {
     if (!editingProduct) return;
-    updateProduct(editingProduct.id, {
-      kode: formData.kode,
-      nama: formData.nama,
-      kategori: formData.kategori,
-      satuan: formData.satuan as 'PCS' | 'BOX' | 'UNIT',
-      status: formData.status as 'Aktif' | 'Tidak Aktif',
-    });
-    toast({ title: 'Berhasil', description: 'Barang berhasil diperbarui.' });
-    resetForm();
-    setIsEditDialogOpen(false);
-    setEditingProduct(null);
+    if (!formData.kode.trim() || !formData.nama.trim() || !formData.kategori || !formData.satuan || !formData.status) {
+      toast({ title: 'Error', description: 'Mohon lengkapi semua field.', variant: 'destructive' });
+      return;
+    }
+    if (isKodeTaken(formData.kode, editingProduct.id)) {
+      toast({ title: 'Kode Sudah Dipakai', description: `Kode ${formData.kode.trim()} sudah digunakan barang lain.`, variant: 'destructive' });
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      await updateProduct(editingProduct.id, {
+        kode: formData.kode.trim(),
+        nama: formData.nama.trim(),
+        kategori: formData.kategori,
+        satuan: formData.satuan as 'PCS' | 'BOX' | 'UNIT',
+        status: formData.status as 'Aktif' | 'Tidak Aktif',
+      });
+      toast({ title: 'Berhasil', description: 'Barang berhasil diperbarui.' });
+      resetForm();
+      setIsEditDialogOpen(false);
+      setEditingProduct(null);
+    } catch (err) {
+      showError(err);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleDelete = (id: string, nama: string) => {
-    deleteProduct(id);
-    toast({ title: 'Berhasil', description: `${nama} berhasil dihapus.` });
+  const handleConfirmDelete = async () => {
+    if (!productToDelete) return;
+    const target = productToDelete;
+    try {
+      await deleteProduct(target.id);
+      toast({ title: 'Berhasil', description: `${target.nama} berhasil dihapus.` });
+    } catch (err) {
+      showError(err, 'Gagal Menghapus');
+    } finally {
+      setProductToDelete(null);
+    }
+  };
+
+  const handleDeactivate = async () => {
+    if (!productToDelete) return;
+    const target = productToDelete;
+    try {
+      await updateProduct(target.id, { status: 'Tidak Aktif' });
+      toast({ title: 'Berhasil', description: `${target.nama} dinonaktifkan.` });
+    } catch (err) {
+      showError(err, 'Gagal Menonaktifkan');
+    } finally {
+      setProductToDelete(null);
+    }
   };
 
   const openEditDialog = (product: Product) => {
@@ -201,6 +281,7 @@ const KelolaBarang = () => {
                   onSubmit={handleAdd}
                   onCancel={() => { resetForm(); setIsAddDialogOpen(false); }}
                   submitLabel="Tambah"
+                  isSaving={isSaving}
                 />
               </DialogContent>
             </Dialog>
@@ -213,11 +294,11 @@ const KelolaBarang = () => {
                 <Input
                   placeholder="Cari nama atau kode barang..."
                   value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
+                  onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
                   className="pl-10"
                 />
               </div>
-              <Select value={filterKategori} onValueChange={setFilterKategori}>
+              <Select value={filterKategori} onValueChange={(v) => { setFilterKategori(v); setCurrentPage(1); }}>
                 <SelectTrigger className="w-full sm:w-48">
                   <SelectValue placeholder="Filter kategori" />
                 </SelectTrigger>
@@ -245,7 +326,9 @@ const KelolaBarang = () => {
                   {paginatedProducts.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={6} className="text-center py-10 text-muted-foreground">
-                        Tidak ada data barang ditemukan
+                        {products.length === 0
+                          ? 'Belum ada barang. Klik "Tambah Barang" untuk memulai.'
+                          : 'Tidak ada data barang ditemukan'}
                       </TableCell>
                     </TableRow>
                   ) : (
@@ -265,7 +348,7 @@ const KelolaBarang = () => {
                             <Button variant="ghost" size="icon" onClick={() => openEditDialog(product)}>
                               <Edit className="h-4 w-4" />
                             </Button>
-                            <Button variant="ghost" size="icon" onClick={() => handleDelete(product.id, product.nama)}>
+                            <Button variant="ghost" size="icon" onClick={() => setProductToDelete(product)}>
                               <Trash2 className="h-4 w-4 text-destructive" />
                             </Button>
                           </div>
@@ -319,9 +402,44 @@ const KelolaBarang = () => {
               onSubmit={handleEdit}
               onCancel={() => { resetForm(); setIsEditDialogOpen(false); setEditingProduct(null); }}
               submitLabel="Simpan"
+              isSaving={isSaving}
             />
           </DialogContent>
         </Dialog>
+
+        {/* Konfirmasi Hapus */}
+        <AlertDialog
+          open={!!productToDelete}
+          onOpenChange={(open) => { if (!open) setProductToDelete(null); }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {deleteHasTransactions ? 'Barang tidak bisa dihapus' : 'Hapus barang ini?'}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {deleteHasTransactions
+                  ? `${productToDelete?.nama} sudah memiliki riwayat transaksi, jadi tidak bisa dihapus agar riwayatnya tetap utuh. Anda bisa menonaktifkannya supaya tidak muncul lagi di form transaksi.`
+                  : `Anda yakin ingin menghapus ${productToDelete?.nama}? Tindakan ini tidak bisa dibatalkan.`}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Batal</AlertDialogCancel>
+              {deleteHasTransactions ? (
+                productToDelete?.status === 'Aktif' && (
+                  <AlertDialogAction onClick={handleDeactivate}>Nonaktifkan</AlertDialogAction>
+                )
+              ) : (
+                <AlertDialogAction
+                  onClick={handleConfirmDelete}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  Hapus
+                </AlertDialogAction>
+              )}
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </DashboardLayout>
   );

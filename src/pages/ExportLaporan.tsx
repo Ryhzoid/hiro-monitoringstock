@@ -24,11 +24,72 @@ const ExportLaporan = () => {
   const [dateTo, setDateTo] = useState('');
   const [showPreview, setShowPreview] = useState(false);
 
+  const hasRange = !!dateFrom && !!dateTo;
+
+  const filteredTransactions = transactions.filter(t => {
+    if (!hasRange) return true;
+    return t.tanggal >= dateFrom && t.tanggal <= dateTo;
+  });
+
+  // Laporan stok per periode:
+  //  - Masuk / Keluar  : total transaksi di dalam rentang tanggal
+  //  - Stok Akhir      : stok sekarang dikurangi mutasi bersih setelah tanggal akhir
+  //  - Stok Awal       : Stok Akhir - Masuk + Keluar (stok pada awal rentang)
+  const stockData = products.map(product => {
+    const stokSekarang = getStokAkhir(product);
+
+    if (!hasRange) {
+      return {
+        ...product,
+        masuk: product.totalMasuk,
+        keluar: product.totalKeluar,
+        stokAwal: product.stokAwal,
+        stokAkhir: stokSekarang,
+        status: getStokStatus(stokSekarang),
+      };
+    }
+
+    let masuk = 0;
+    let keluar = 0;
+    let mutasiSetelahPeriode = 0;
+
+    transactions.forEach(t => {
+      if (t.barangId !== product.id) return;
+      const delta = t.jenis === 'Masuk' ? t.jumlah : -t.jumlah;
+      if (t.tanggal > dateTo) {
+        mutasiSetelahPeriode += delta;
+      } else if (t.tanggal >= dateFrom) {
+        if (t.jenis === 'Masuk') masuk += t.jumlah;
+        else keluar += t.jumlah;
+      }
+    });
+
+    const stokAkhir = stokSekarang - mutasiSetelahPeriode;
+    const stokAwal = stokAkhir - masuk + keluar;
+
+    return {
+      ...product,
+      masuk,
+      keluar,
+      stokAwal,
+      stokAkhir,
+      status: getStokStatus(stokAkhir),
+    };
+  });
+
   const handlePreview = () => {
     if (!reportType || !period || !dateFrom || !dateTo) {
       toast({
         title: 'Error',
         description: 'Lengkapi semua pilihan untuk melihat preview.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (dateFrom > dateTo) {
+      toast({
+        title: 'Rentang Tanggal Tidak Valid',
+        description: 'Tanggal mulai tidak boleh lebih besar dari tanggal akhir.',
         variant: 'destructive',
       });
       return;
@@ -49,8 +110,8 @@ const ExportLaporan = () => {
           Kategori: p.kategori,
           Satuan: p.satuan,
           'Stok Awal': p.stokAwal,
-          Masuk: p.totalMasuk,
-          Keluar: p.totalKeluar,
+          Masuk: p.masuk,
+          Keluar: p.keluar,
           'Stok Akhir': p.stokAkhir,
           Status: p.status,
         })));
@@ -59,7 +120,7 @@ const ExportLaporan = () => {
           filename,
           title,
           ['Kode', 'Nama Barang', 'Kategori', 'Satuan', 'Stok Awal', 'Masuk', 'Keluar', 'Stok Akhir', 'Status'],
-          stockData.map(p => [p.kode, p.nama, p.kategori, p.satuan, p.stokAwal, p.totalMasuk, p.totalKeluar, p.stokAkhir, p.status])
+          stockData.map(p => [p.kode, p.nama, p.kategori, p.satuan, p.stokAwal, p.masuk, p.keluar, p.stokAkhir, p.status])
         );
       }
     } else {
@@ -88,17 +149,6 @@ const ExportLaporan = () => {
       description: `Laporan ${reportType === 'stok' ? 'Stok' : 'Transaksi'} berhasil diexport ke ${format.toUpperCase()}.`,
     });
   };
-
-  const filteredTransactions = transactions.filter(t => {
-    if (!dateFrom || !dateTo) return true;
-    return t.tanggal >= dateFrom && t.tanggal <= dateTo;
-  });
-
-  const stockData = products.map(product => ({
-    ...product,
-    stokAkhir: getStokAkhir(product),
-    status: getStokStatus(getStokAkhir(product)),
-  }));
 
   return (
     <DashboardLayout>
@@ -225,14 +275,14 @@ const ExportLaporan = () => {
                           <TableCell>{product.nama}</TableCell>
                           <TableCell>{product.kategori}</TableCell>
                           <TableCell className="text-right">{product.stokAwal}</TableCell>
-                          <TableCell className="text-right text-[hsl(var(--success))]">+{product.totalMasuk}</TableCell>
-                          <TableCell className="text-right text-[hsl(var(--info))]">-{product.totalKeluar}</TableCell>
+                          <TableCell className="text-right text-[hsl(var(--success))]">+{product.masuk}</TableCell>
+                          <TableCell className="text-right text-[hsl(var(--info))]">-{product.keluar}</TableCell>
                           <TableCell className="text-right font-bold">{product.stokAkhir}</TableCell>
                           <TableCell>
-                            <Badge 
+                            <Badge
                               className={
-                                product.status === 'Habis' 
-                                  ? 'bg-destructive/10 text-destructive' 
+                                product.status === 'Habis'
+                                  ? 'bg-destructive/10 text-destructive'
                                   : product.status === 'Menipis'
                                   ? 'bg-[hsl(var(--warning))]/10 text-[hsl(var(--warning))]'
                                   : 'bg-[hsl(var(--success))]/10 text-[hsl(var(--success))]'
@@ -262,7 +312,7 @@ const ExportLaporan = () => {
                         <TableRow key={transaction.id}>
                           <TableCell className="font-medium">{transaction.tanggal}</TableCell>
                           <TableCell>
-                            <Badge 
+                            <Badge
                               className={
                                 transaction.jenis === 'Masuk'
                                   ? 'bg-[hsl(var(--success))]/10 text-[hsl(var(--success))]'
