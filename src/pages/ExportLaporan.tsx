@@ -17,7 +17,9 @@ type ReportType = 'stok' | 'transaksi';
 type Period = 'harian' | 'mingguan' | 'bulanan';
 
 const ExportLaporan = () => {
-  const { products, transactions } = useData();
+  const { products, transactions: allTransactions } = useData();
+  // Stok dihitung tanpa transaksi yang dibatalkan.
+  const transactions = allTransactions.filter(t => !t.dibatalkan);
   const [reportType, setReportType] = useState<ReportType | ''>('');
   const [period, setPeriod] = useState<Period | ''>('');
   const [dateFrom, setDateFrom] = useState('');
@@ -26,7 +28,7 @@ const ExportLaporan = () => {
 
   const hasRange = !!dateFrom && !!dateTo;
 
-  const filteredTransactions = transactions.filter(t => {
+  const filteredTransactions = allTransactions.filter(t => {
     if (!hasRange) return true;
     return t.tanggal >= dateFrom && t.tanggal <= dateTo;
   });
@@ -133,13 +135,15 @@ const ExportLaporan = () => {
           Jumlah: t.jumlah,
           Keterangan: t.keterangan,
           'User Input': t.userInput,
+          Status: t.dibatalkan ? 'Dibatalkan' : 'Valid',
+          'Alasan Pembatalan': t.alasanPembatalan ?? '',
         })));
       } else {
         exportToPdf(
           filename,
           title,
-          ['Tanggal', 'Jenis', 'Nama Barang', 'Jumlah', 'Keterangan', 'User Input'],
-          filteredTransactions.map(t => [t.tanggal, t.jenis, t.namaBarang, t.jumlah, t.keterangan, t.userInput])
+          ['Tanggal', 'Jenis', 'Nama Barang', 'Jumlah', 'Keterangan', 'User Input', 'Status'],
+          filteredTransactions.map(t => [t.tanggal, t.jenis, t.namaBarang, t.jumlah, t.keterangan, t.userInput, t.dibatalkan ? 'Dibatalkan' : 'Valid'])
         );
       }
     }
@@ -305,6 +309,7 @@ const ExportLaporan = () => {
                         <TableHead className="text-right">Jumlah</TableHead>
                         <TableHead>Keterangan</TableHead>
                         <TableHead>User</TableHead>
+                        <TableHead>Status</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -328,6 +333,13 @@ const ExportLaporan = () => {
                           </TableCell>
                           <TableCell className="text-muted-foreground">{transaction.keterangan}</TableCell>
                           <TableCell>{transaction.userInput}</TableCell>
+                          <TableCell>
+                            {transaction.dibatalkan ? (
+                              <Badge variant="secondary">Dibatalkan</Badge>
+                            ) : (
+                              <Badge className="bg-[hsl(var(--success))]/10 text-[hsl(var(--success))]">Valid</Badge>
+                            )}
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>

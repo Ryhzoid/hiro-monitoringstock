@@ -45,7 +45,9 @@ const StatCard = ({
 
 const Dashboard = () => {
   const { user } = useAuth();
-  const { products, transactions } = useData();
+  const { products, transactions: allTransactions } = useData();
+  // Transaksi yang dibatalkan tidak ikut dihitung.
+  const transactions = allTransactions.filter(t => !t.dibatalkan);
 
   // Semua tanggal memakai jam lokal perangkat (bukan UTC), supaya di WIB tidak
   // mundur sehari atau salah bulan pada dini hari.

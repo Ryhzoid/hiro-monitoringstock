@@ -1,7 +1,7 @@
 import { Fragment, useState } from 'react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { useData } from '@/contexts/DataContext';
-import { categories, getStokAkhir, getStokStatus, sortBatchesByTanggal } from '@/data/dummyData';
+import { getStokAkhir, getStokStatus, sortBatchesByTanggal } from '@/data/dummyData';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,7 +13,7 @@ import { exportToExcel } from '@/lib/export';
 import { Boxes, Search, Download, ArrowUpDown, ChevronDown, ChevronRight } from 'lucide-react';
 
 const StokBarang = () => {
-  const { products, batches } = useData();
+  const { products, batches, categories } = useData();
   const [searchTerm, setSearchTerm] = useState('');
   const [filterKategori, setFilterKategori] = useState('all');
   const [sortBy, setSortBy] = useState<'name' | 'stock-asc' | 'stock-desc'>('name');
@@ -111,7 +111,7 @@ const StokBarang = () => {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Semua Kategori</SelectItem>
-                  {categories.map(cat => <SelectItem key={cat} value={cat}>{cat}</SelectItem>)}
+                 {categories.map(cat => <SelectItem key={cat.id} value={cat.nama}>{cat.nama}</SelectItem>)}
                 </SelectContent>
               </Select>
               <Select value={sortBy} onValueChange={(v) => setSortBy(v as typeof sortBy)}>

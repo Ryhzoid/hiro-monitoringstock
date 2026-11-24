@@ -1,0 +1,422 @@
+-- =====================================================================
+-- Hiro Stock View: skema database v2 (Supabase / PostgreSQL)
+-- Disusun dari kode proyek: DataContext, Login, BarangMasuk/Keluar,
+-- KelolaBarang, KelolaPengguna, StokBarang, ExportLaporan, dst.
+-- BELUM DIUJI di database sungguhan. Jalankan di project Supabase baru
+-- (SQL Editor) dan kirim pesan error kalau ada.
+--
+-- Prinsip:
+--   * Stok TIDAK disimpan di kolom. Stok akhir = jumlah sisa semua batch.
+--   * Stok hanya berubah lewat catat_transaksi() (atomik, dengan batch).
+--   * Hak akses ditegakkan di database (RLS), bukan cuma di frontend.
+-- =====================================================================
+
+create type user_role as enum ('admin', 'manajer');
+create type jenis_transaksi as enum ('Masuk', 'Keluar');
+
+-- ---------- Tabel ----------
+
+-- Password dikelola Supabase Auth (auth.users), otomatis di-hash.
+-- email disalin ke sini supaya halaman Kelola Pengguna bisa menampilkannya
+-- (frontend tidak boleh membaca auth.users). Perubahan email dan pembuatan
+-- akun dilakukan lewat Edge Function, bukan langsung dari frontend.
+create table profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  nama text not null,
+  email text not null unique,
+  role user_role not null,
+  aktif boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+create table categories (
+  id bigint generated always as identity primary key,
+  nama text not null unique,
+  kode text,        -- kode SKU kategori (opsional)
+  deskripsi text
+);
+create unique index categories_nama_lower_uniq on categories (lower(nama));
+create unique index categories_kode_uniq on categories (upper(kode)) where kode is not null;
+
+-- Unit satuan (Pieces, Box, Meter, Roll, ...), dikelola dari aplikasi.
+create table units (
+  id bigint generated always as identity primary key,
+  nama text not null,
+  singkatan text not null,
+  aktif boolean not null default true,
+  created_at timestamptz not null default now()
+);
+create unique index units_nama_uniq      on units (lower(nama));
+create unique index units_singkatan_uniq on units (lower(singkatan));
+
+-- Supplier / merk, dikelola dari aplikasi.
+create table suppliers (
+  id bigint generated always as identity primary key,
+  nama text not null,
+  npwp text,
+  contact_person text,
+  telepon text,
+  email text,
+  alamat text,
+  created_at timestamptz not null default now()
+);
+create unique index suppliers_nama_uniq on suppliers (lower(nama));
+
+create table products (
+  id uuid primary key default gen_random_uuid(),
+  kode text not null unique,
+  nama text not null,
+  category_id bigint not null references categories(id),
+  unit_id bigint not null references units(id),
+  supplier_id bigint references suppliers(id),   -- supplier/merk (opsional)
+  aktif boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+create table transactions (
+  id bigint generated always as identity primary key,
+  tanggal date not null default current_date,
+  jenis jenis_transaksi not null,
+  product_id uuid not null references products(id),
+  jumlah integer not null check (jumlah > 0),
+  keterangan text,
+  created_by uuid not null references profiles(id),
+  created_at timestamptz not null default now(),
+  -- Pembatalan: transaksi tidak pernah dihapus/diubah, hanya ditandai dibatalkan.
+  dibatalkan boolean not null default false,
+  dibatalkan_oleh uuid,            -- id profil manajer (sengaja tanpa FK agar embed profiles(nama) tidak ambigu)
+  dibatalkan_pada timestamptz,
+  alasan_pembatalan text
+);
+create index transactions_tanggal_idx on transactions (tanggal);
+create index transactions_product_idx on transactions (product_id);
+
+-- Setiap barang masuk membentuk satu batch.
+create table stock_batches (
+  id bigint generated always as identity primary key,
+  product_id uuid not null references products(id),
+  transaction_id bigint not null references transactions(id),
+  tanggal date not null,
+  jumlah_awal integer not null check (jumlah_awal > 0),
+  sisa integer not null check (sisa >= 0),
+  created_at timestamptz not null default now()
+);
+create index stock_batches_product_idx
+  on stock_batches (product_id, tanggal, id) where sisa > 0;
+
+-- Transaksi keluar mengambil berapa dari batch mana.
+create table batch_allocations (
+  id bigint generated always as identity primary key,
+  transaction_id bigint not null references transactions(id),
+  batch_id bigint not null references stock_batches(id),
+  jumlah integer not null check (jumlah > 0)
+);
+
+-- Ringkasan stok per barang (dihitung, bukan disimpan).
+-- total_masuk / total_keluar dipakai kolom di halaman Stok Barang.
+create view product_stock with (security_invoker = true) as
+select p.id as product_id,
+       coalesce((select sum(t.jumlah) from transactions t
+                 where t.product_id = p.id and t.jenis = 'Masuk'
+                   and not t.dibatalkan), 0)::int  as total_masuk,
+       coalesce((select sum(t.jumlah) from transactions t
+                 where t.product_id = p.id and t.jenis = 'Keluar'
+                   and not t.dibatalkan), 0)::int as total_keluar,
+       coalesce((select sum(b.sisa) from stock_batches b
+                 where b.product_id = p.id), 0)::int                        as stok_akhir
+from products p;
+
+-- ---------- Helper role ----------
+
+-- Mengembalikan role user yang sedang login, atau NULL kalau akun
+-- tidak punya profil atau sudah dinonaktifkan.
+create or replace function app_role()
+returns user_role
+language sql stable security definer set search_path = public
+as $$
+  select role from profiles where id = auth.uid() and aktif
+$$;
+
+-- ---------- Fungsi transaksi ----------
+-- p_alokasi (opsional, khusus 'Keluar'): jsonb seperti
+--   [{"batch_id": 12, "jumlah": 5}, {"batch_id": 15, "jumlah": 3}]
+-- Dipakai kalau user memilih alokasi batch manual (seperti form Barang
+-- Keluar sekarang). Kalau NULL, sistem mengambil otomatis dari batch
+-- tertua (FIFO ketat).
+
+create or replace function catat_transaksi(
+  p_jenis jenis_transaksi,
+  p_product_id uuid,
+  p_jumlah integer,
+  p_keterangan text default null,
+  p_tanggal date default current_date,
+  p_alokasi jsonb default null
+) returns bigint
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_trx_id bigint;
+  v_butuh integer := p_jumlah;
+  v_stok integer;
+  v_total integer;
+  v_batch record;
+  v_alok record;
+  v_ambil integer;
+begin
+  if app_role() is distinct from 'admin' then
+    raise exception 'Hanya admin aktif yang boleh mencatat transaksi';
+  end if;
+
+  if p_jumlah is null or p_jumlah <= 0 then
+    raise exception 'Jumlah harus lebih dari 0';
+  end if;
+
+  -- Kunci baris barang supaya input bersamaan tidak bentrok.
+  perform 1 from products where id = p_product_id and aktif for update;
+  if not found then
+    raise exception 'Barang tidak ditemukan atau tidak aktif';
+  end if;
+
+  insert into transactions (tanggal, jenis, product_id, jumlah, keterangan, created_by)
+  values (p_tanggal, p_jenis, p_product_id, p_jumlah, p_keterangan, auth.uid())
+  returning id into v_trx_id;
+
+  if p_jenis = 'Masuk' then
+    insert into stock_batches (product_id, transaction_id, tanggal, jumlah_awal, sisa)
+    values (p_product_id, v_trx_id, p_tanggal, p_jumlah, p_jumlah);
+
+  else
+    select coalesce(sum(sisa), 0) into v_stok
+    from stock_batches where product_id = p_product_id;
+
+    if v_stok < p_jumlah then
+      raise exception 'Stok tidak cukup (tersedia %)', v_stok;
+    end if;
+
+    if p_alokasi is null then
+      -- Otomatis: ambil dari batch tertua dulu (FIFO).
+      for v_batch in
+        select id, sisa from stock_batches
+        where product_id = p_product_id and sisa > 0
+        order by tanggal, id
+        for update
+      loop
+        exit when v_butuh = 0;
+        v_ambil := least(v_batch.sisa, v_butuh);
+
+        update stock_batches set sisa = sisa - v_ambil where id = v_batch.id;
+        insert into batch_allocations (transaction_id, batch_id, jumlah)
+        values (v_trx_id, v_batch.id, v_ambil);
+
+        v_butuh := v_butuh - v_ambil;
+      end loop;
+
+    else
+      -- Manual: ikuti alokasi dari user, tapi tetap divalidasi.
+      select coalesce(sum((a->>'jumlah')::int), 0) into v_total
+      from jsonb_array_elements(p_alokasi) a;
+
+      if v_total <> p_jumlah then
+        raise exception 'Total alokasi batch (%) harus sama dengan jumlah barang keluar (%)',
+          v_total, p_jumlah;
+      end if;
+
+      for v_alok in
+        select (a->>'batch_id')::bigint as batch_id,
+               (a->>'jumlah')::int as jumlah
+        from jsonb_array_elements(p_alokasi) a
+      loop
+        if v_alok.jumlah <= 0 then
+          raise exception 'Jumlah alokasi batch harus lebih dari 0';
+        end if;
+
+        update stock_batches
+           set sisa = sisa - v_alok.jumlah
+         where id = v_alok.batch_id
+           and product_id = p_product_id
+           and sisa >= v_alok.jumlah;
+
+        if not found then
+          raise exception 'Batch % tidak valid atau sisanya tidak cukup', v_alok.batch_id;
+        end if;
+
+        insert into batch_allocations (transaction_id, batch_id, jumlah)
+        values (v_trx_id, v_alok.batch_id, v_alok.jumlah);
+      end loop;
+    end if;
+  end if;
+
+  return v_trx_id;
+end;
+$$;
+
+revoke execute on function catat_transaksi(jenis_transaksi, uuid, integer, text, date, jsonb) from public, anon;
+grant  execute on function catat_transaksi(jenis_transaksi, uuid, integer, text, date, jsonb) to authenticated;
+
+-- ---------- Pembatalan transaksi (koreksi) ----------
+-- Hanya manajer aktif. Transaksi TIDAK dihapus: ditandai dibatalkan beserta
+-- alasan, pelaku, dan waktu, sehingga riwayat tetap utuh dan bisa diaudit.
+--  * Masuk : batchnya dinolkan. Hanya boleh kalau belum ada barang dari batch
+--            itu yang keluar (batalkan dulu transaksi keluar yang terkait).
+--  * Keluar: jumlahnya dikembalikan ke batch asal sesuai batch_allocations,
+--            jadi urutan FIFO tetap benar.
+-- "Mengedit" transaksi = batalkan lalu input ulang yang benar.
+
+create or replace function batalkan_transaksi(
+  p_transaksi_id bigint,
+  p_alasan text
+) returns void
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_product_id uuid;
+  v_trx transactions%rowtype;
+  v_batch stock_batches%rowtype;
+  v_alok record;
+begin
+  if app_role() is distinct from 'manajer' then
+    raise exception 'Hanya manajer aktif yang boleh membatalkan transaksi';
+  end if;
+
+  if p_alasan is null or length(trim(p_alasan)) < 3 then
+    raise exception 'Alasan pembatalan wajib diisi';
+  end if;
+
+  select product_id into v_product_id from transactions where id = p_transaksi_id;
+  if not found then
+    raise exception 'Transaksi tidak ditemukan';
+  end if;
+
+  -- Kunci barang lebih dulu (urutan sama dengan catat_transaksi) lalu transaksinya.
+  perform 1 from products where id = v_product_id for update;
+  select * into v_trx from transactions where id = p_transaksi_id for update;
+
+  if v_trx.dibatalkan then
+    raise exception 'Transaksi ini sudah dibatalkan sebelumnya';
+  end if;
+
+  if v_trx.jenis = 'Masuk' then
+    select * into v_batch from stock_batches where transaction_id = v_trx.id for update;
+    if not found then
+      raise exception 'Batch untuk transaksi ini tidak ditemukan';
+    end if;
+
+    if v_batch.sisa <> v_batch.jumlah_awal then
+      raise exception 'Tidak bisa dibatalkan: sebagian barang dari transaksi ini sudah keluar (sisa % dari %). Batalkan transaksi keluar yang terkait lebih dulu.',
+        v_batch.sisa, v_batch.jumlah_awal;
+    end if;
+
+    update stock_batches set sisa = 0 where id = v_batch.id;
+
+  else
+    for v_alok in
+      select batch_id, jumlah from batch_allocations where transaction_id = v_trx.id
+    loop
+      update stock_batches set sisa = sisa + v_alok.jumlah where id = v_alok.batch_id;
+    end loop;
+  end if;
+
+  update transactions
+     set dibatalkan = true,
+         dibatalkan_oleh = auth.uid(),
+         dibatalkan_pada = now(),
+         alasan_pembatalan = trim(p_alasan)
+   where id = v_trx.id;
+end;
+$$;
+
+revoke execute on function batalkan_transaksi(bigint, text) from public, anon;
+grant  execute on function batalkan_transaksi(bigint, text) to authenticated;
+
+-- ---------- Row Level Security ----------
+
+alter table profiles          enable row level security;
+alter table categories        enable row level security;
+alter table products          enable row level security;
+alter table transactions      enable row level security;
+alter table stock_batches     enable row level security;
+alter table batch_allocations enable row level security;
+alter table units             enable row level security;
+alter table suppliers         enable row level security;
+
+-- Hanya user aktif (punya role) yang boleh membaca.
+create policy "baca profiles"   on profiles          for select to authenticated using (app_role() is not null);
+create policy "baca categories" on categories        for select to authenticated using (app_role() is not null);
+create policy "baca products"   on products          for select to authenticated using (app_role() is not null);
+create policy "baca transaksi"  on transactions      for select to authenticated using (app_role() is not null);
+create policy "baca batch"      on stock_batches     for select to authenticated using (app_role() is not null);
+create policy "baca alokasi"    on batch_allocations for select to authenticated using (app_role() is not null);
+
+-- Admin kelola barang & kategori.
+create policy "admin kelola barang" on products for all to authenticated
+  using (app_role() = 'admin') with check (app_role() = 'admin');
+create policy "admin kelola kategori" on categories for all to authenticated
+  using (app_role() = 'admin') with check (app_role() = 'admin');
+
+create policy "baca units"     on units     for select to authenticated using (app_role() is not null);
+create policy "baca suppliers" on suppliers for select to authenticated using (app_role() is not null);
+create policy "admin kelola units" on units for all to authenticated
+  using (app_role() = 'admin') with check (app_role() = 'admin');
+create policy "admin kelola suppliers" on suppliers for all to authenticated
+  using (app_role() = 'admin') with check (app_role() = 'admin');
+
+-- Manajer ubah profil pengguna, tapi hanya kolom nama, role, aktif.
+-- (email diubah lewat Edge Function agar tetap sinkron dengan Auth.)
+create policy "manajer ubah profil" on profiles for update to authenticated
+  using (app_role() = 'manajer') with check (app_role() = 'manajer');
+revoke update on profiles from authenticated, anon;
+grant  update (nama, role, aktif) on profiles to authenticated;
+
+-- Pengaman: harus selalu ada minimal satu manajer aktif, supaya tidak ada
+-- yang tanpa sengaja menonaktifkan / menurunkan manajer terakhir (termasuk
+-- dirinya sendiri) dan mengunci semua orang dari halaman Kelola Pengguna.
+create or replace function jaga_manajer_terakhir()
+returns trigger
+language plpgsql security definer set search_path = public
+as $$
+begin
+  if old.role = 'manajer' and old.aktif
+     and (new.role <> 'manajer' or not new.aktif) then
+    if not exists (
+      select 1 from profiles
+      where role = 'manajer' and aktif and id <> old.id
+    ) then
+      raise exception 'Harus ada minimal satu manajer aktif';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+create trigger profiles_jaga_manajer
+  before update on profiles
+  for each row execute function jaga_manajer_terakhir();
+
+-- transactions, stock_batches, batch_allocations: tidak ada policy tulis
+-- dan hak tulisnya dicabut. Perubahan hanya lewat catat_transaksi().
+revoke insert, update, delete on transactions, stock_batches, batch_allocations
+  from authenticated, anon;
+
+-- ---------- Data awal ----------
+
+insert into categories (nama) values
+  ('Indoor Lighting'), ('Outdoor Lighting'), ('Industrial Lighting');
+
+insert into units (nama, singkatan) values
+  ('Pieces', 'Pcs'), ('Box', 'Box'), ('Unit', 'Unit');
+
+-- ---------- Cara menambah pengguna (dilakukan manual) ----------
+-- Tidak ada fitur tambah pengguna di website. Untuk setiap orang baru:
+--  1. Supabase > Authentication > Users > Add user: isi email dan password,
+--     centang "Auto Confirm User".
+--  2. Jalankan di SQL Editor (ganti nama, email, dan role). Id diambil
+--     otomatis dari email, jadi tidak perlu menyalin UUID:
+--
+--   insert into profiles (id, nama, email, role)
+--   select id, 'Nama Lengkap', email, 'manajer'   -- atau 'admin'
+--   from auth.users
+--   where email = 'email@perusahaan.com';
+--
+-- Buat akun MANAJER pertama lebih dulu. Lupa password: reset lewat
+-- Authentication > Users. Matikan juga opsi pendaftaran bebas (sign up)
+-- di pengaturan Authentication.

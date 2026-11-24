@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
+import { PaginationBar } from '@/components/PaginationBar';
 import { useData } from '@/contexts/DataContext';
-import { categories, Product } from '@/data/dummyData';
+import { Product, Category, Supplier, Unit } from '@/data/dummyData';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -23,24 +24,43 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from '@/hooks/use-toast';
 import { Plus, Search, Edit, Trash2, Package } from 'lucide-react';
 
+const ITEMS_PER_PAGE = 10;
+const NO_SUPPLIER = 'none'; // nilai Select untuk "tanpa supplier" (Select tidak boleh bernilai kosong)
+
 interface ProductFormData {
   kode: string;
   nama: string;
-  kategori: string;
-  satuan: 'PCS' | 'BOX' | 'UNIT' | '';
+  categoryId: string;
+  unitId: string;
+  supplierId: string; // '' = tanpa supplier
   status: 'Aktif' | 'Tidak Aktif' | '';
 }
+
+const emptyForm = (): ProductFormData => ({
+  kode: '',
+  nama: '',
+  categoryId: '',
+  unitId: '',
+  supplierId: '',
+  status: '',
+});
 
 interface ProductFormProps {
   formData: ProductFormData;
   setFormData: (data: ProductFormData) => void;
+  categories: Category[];
+  units: Unit[];
+  suppliers: Supplier[];
   onSubmit: () => void;
   onCancel: () => void;
   submitLabel: string;
   isSaving: boolean;
 }
 
-const ProductForm = ({ formData, setFormData, onSubmit, onCancel, submitLabel, isSaving }: ProductFormProps) => (
+// Didefinisikan di luar halaman supaya input tidak kehilangan fokus saat mengetik.
+const ProductForm = ({
+  formData, setFormData, categories, units, suppliers, onSubmit, onCancel, submitLabel, isSaving,
+}: ProductFormProps) => (
   <div className="space-y-4">
     <div className="grid grid-cols-2 gap-4">
       <div className="space-y-2">
@@ -60,24 +80,57 @@ const ProductForm = ({ formData, setFormData, onSubmit, onCancel, submitLabel, i
         />
       </div>
     </div>
+
     <div className="space-y-2">
       <Label>Kategori</Label>
-      <Select value={formData.kategori} onValueChange={(v) => setFormData({ ...formData, kategori: v })}>
+      <Select value={formData.categoryId} onValueChange={(v) => setFormData({ ...formData, categoryId: v })}>
         <SelectTrigger><SelectValue placeholder="Pilih kategori" /></SelectTrigger>
         <SelectContent>
-          {categories.map(cat => <SelectItem key={cat} value={cat}>{cat}</SelectItem>)}
+          {categories.length === 0 ? (
+            <div className="px-2 py-3 text-sm text-muted-foreground">
+              Belum ada kategori. Tambahkan dulu di menu Kategori.
+            </div>
+          ) : (
+            categories.map(cat => <SelectItem key={cat.id} value={cat.id}>{cat.nama}</SelectItem>)
+          )}
         </SelectContent>
       </Select>
     </div>
+
+    <div className="space-y-2">
+      <Label>Supplier/Merk</Label>
+      <Select
+        value={formData.supplierId || NO_SUPPLIER}
+        onValueChange={(v) => setFormData({ ...formData, supplierId: v === NO_SUPPLIER ? '' : v })}
+      >
+        <SelectTrigger><SelectValue placeholder="Pilih supplier/merk" /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NO_SUPPLIER}>Tanpa supplier</SelectItem>
+          {suppliers.map(s => <SelectItem key={s.id} value={s.id}>{s.nama}</SelectItem>)}
+        </SelectContent>
+      </Select>
+      {suppliers.length === 0 && (
+        <p className="text-xs text-muted-foreground">Belum ada supplier. Tambahkan di menu Supplier.</p>
+      )}
+    </div>
+
     <div className="grid grid-cols-2 gap-4">
       <div className="space-y-2">
         <Label>Satuan</Label>
-        <Select value={formData.satuan} onValueChange={(v) => setFormData({ ...formData, satuan: v as ProductFormData['satuan'] })}>
+        <Select value={formData.unitId} onValueChange={(v) => setFormData({ ...formData, unitId: v })}>
           <SelectTrigger><SelectValue placeholder="Pilih satuan" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="PCS">PCS</SelectItem>
-            <SelectItem value="BOX">BOX</SelectItem>
-            <SelectItem value="UNIT">UNIT</SelectItem>
+            {units.length === 0 ? (
+              <div className="px-2 py-3 text-sm text-muted-foreground">
+                Belum ada unit aktif. Tambahkan di menu Unit Satuan.
+              </div>
+            ) : (
+              units.map(u => (
+                <SelectItem key={u.id} value={u.id}>
+                  {u.nama} ({u.singkatan})
+                </SelectItem>
+              ))
+            )}
           </SelectContent>
         </Select>
       </div>
@@ -92,6 +145,7 @@ const ProductForm = ({ formData, setFormData, onSubmit, onCancel, submitLabel, i
         </Select>
       </div>
     </div>
+
     <DialogFooter>
       <Button variant="outline" onClick={onCancel} disabled={isSaving}>
         Batal
@@ -104,37 +158,40 @@ const ProductForm = ({ formData, setFormData, onSubmit, onCancel, submitLabel, i
 );
 
 const KelolaBarang = () => {
-  const { products, transactions, addProduct, updateProduct, deleteProduct } = useData();
+  const {
+    products, transactions, categories, units, suppliers,
+    addProduct, updateProduct, deleteProduct,
+  } = useData();
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterKategori, setFilterKategori] = useState('all');
+  const [filterKategori, setFilterKategori] = useState('all'); // id kategori
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10;
+  const [page, setPage] = useState(1);
+  const [formData, setFormData] = useState<ProductFormData>(emptyForm());
 
-  const [formData, setFormData] = useState({
-    kode: '',
-    nama: '',
-    kategori: '',
-    satuan: '' as 'PCS' | 'BOX' | 'UNIT' | '',
-    status: '' as 'Aktif' | 'Tidak Aktif' | '',
-  });
-
+  const q = searchTerm.trim().toLowerCase();
   const filteredProducts = products.filter(product => {
-    const matchesSearch = product.nama.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          product.kode.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesKategori = filterKategori === 'all' || product.kategori === filterKategori;
+    const matchesSearch =
+      !q ||
+      product.nama.toLowerCase().includes(q) ||
+      product.kode.toLowerCase().includes(q) ||
+      product.supplier.toLowerCase().includes(q);
+    const matchesKategori = filterKategori === 'all' || product.categoryId === filterKategori;
     return matchesSearch && matchesKategori;
   });
 
-  const totalPages = Math.ceil(filteredProducts.length / itemsPerPage);
+  const totalPages = Math.max(1, Math.ceil(filteredProducts.length / ITEMS_PER_PAGE));
+  const currentPage = Math.min(page, totalPages);
   const paginatedProducts = filteredProducts.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
   );
+
+  // Pilihan unit: yang aktif, ditambah unit milik barang yang sedang diedit (walau sudah nonaktif).
+  const unitOptions = units.filter(u => u.aktif || u.id === formData.unitId);
 
   // Barang yang sudah punya riwayat transaksi tidak boleh dihapus (riwayat harus tetap utuh).
   const deleteHasTransactions = productToDelete
@@ -152,13 +209,18 @@ const KelolaBarang = () => {
     });
   };
 
-  const resetForm = () => {
-    setFormData({ kode: '', nama: '', kategori: '', satuan: '', status: '' });
-  };
+  const resetForm = () => setFormData(emptyForm());
+
+  const isFormComplete = () =>
+    formData.kode.trim() && formData.nama.trim() && formData.categoryId && formData.unitId && formData.status;
 
   const handleAdd = async () => {
-    if (!formData.kode.trim() || !formData.nama.trim() || !formData.kategori || !formData.satuan || !formData.status) {
-      toast({ title: 'Error', description: 'Mohon lengkapi semua field.', variant: 'destructive' });
+    if (!isFormComplete()) {
+      toast({
+        title: 'Error',
+        description: 'Mohon lengkapi kode, nama, kategori, satuan, dan status.',
+        variant: 'destructive',
+      });
       return;
     }
     if (isKodeTaken(formData.kode)) {
@@ -171,8 +233,9 @@ const KelolaBarang = () => {
       await addProduct({
         kode: formData.kode.trim(),
         nama: formData.nama.trim(),
-        kategori: formData.kategori,
-        satuan: formData.satuan as 'PCS' | 'BOX' | 'UNIT',
+        categoryId: formData.categoryId,
+        unitId: formData.unitId,
+        supplierId: formData.supplierId,
         status: formData.status as 'Aktif' | 'Tidak Aktif',
       });
       toast({ title: 'Berhasil', description: 'Barang berhasil ditambahkan.' });
@@ -187,8 +250,12 @@ const KelolaBarang = () => {
 
   const handleEdit = async () => {
     if (!editingProduct) return;
-    if (!formData.kode.trim() || !formData.nama.trim() || !formData.kategori || !formData.satuan || !formData.status) {
-      toast({ title: 'Error', description: 'Mohon lengkapi semua field.', variant: 'destructive' });
+    if (!isFormComplete()) {
+      toast({
+        title: 'Error',
+        description: 'Mohon lengkapi kode, nama, kategori, satuan, dan status.',
+        variant: 'destructive',
+      });
       return;
     }
     if (isKodeTaken(formData.kode, editingProduct.id)) {
@@ -201,8 +268,9 @@ const KelolaBarang = () => {
       await updateProduct(editingProduct.id, {
         kode: formData.kode.trim(),
         nama: formData.nama.trim(),
-        kategori: formData.kategori,
-        satuan: formData.satuan as 'PCS' | 'BOX' | 'UNIT',
+        categoryId: formData.categoryId,
+        unitId: formData.unitId,
+        supplierId: formData.supplierId,
         status: formData.status as 'Aktif' | 'Tidak Aktif',
       });
       toast({ title: 'Berhasil', description: 'Barang berhasil diperbarui.' });
@@ -247,8 +315,9 @@ const KelolaBarang = () => {
     setFormData({
       kode: product.kode,
       nama: product.nama,
-      kategori: product.kategori,
-      satuan: product.satuan,
+      categoryId: product.categoryId,
+      unitId: product.unitId,
+      supplierId: product.supplierId,
       status: product.status,
     });
     setIsEditDialogOpen(true);
@@ -278,6 +347,9 @@ const KelolaBarang = () => {
                 <ProductForm
                   formData={formData}
                   setFormData={setFormData}
+                  categories={categories}
+                  units={unitOptions}
+                  suppliers={suppliers}
                   onSubmit={handleAdd}
                   onCancel={() => { resetForm(); setIsAddDialogOpen(false); }}
                   submitLabel="Tambah"
@@ -292,19 +364,19 @@ const KelolaBarang = () => {
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Cari nama atau kode barang..."
+                  placeholder="Cari nama, kode, atau supplier..."
                   value={searchTerm}
-                  onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+                  onChange={(e) => { setSearchTerm(e.target.value); setPage(1); }}
                   className="pl-10"
                 />
               </div>
-              <Select value={filterKategori} onValueChange={(v) => { setFilterKategori(v); setCurrentPage(1); }}>
-                <SelectTrigger className="w-full sm:w-48">
+              <Select value={filterKategori} onValueChange={(v) => { setFilterKategori(v); setPage(1); }}>
+                <SelectTrigger className="w-full sm:w-56">
                   <SelectValue placeholder="Filter kategori" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Semua Kategori</SelectItem>
-                  {categories.map(cat => <SelectItem key={cat} value={cat}>{cat}</SelectItem>)}
+                  {categories.map(cat => <SelectItem key={cat.id} value={cat.id}>{cat.nama}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -317,6 +389,7 @@ const KelolaBarang = () => {
                     <TableHead>Kode Barang</TableHead>
                     <TableHead>Nama Barang</TableHead>
                     <TableHead className="hidden md:table-cell">Kategori</TableHead>
+                    <TableHead className="hidden lg:table-cell">Supplier/Merk</TableHead>
                     <TableHead className="hidden sm:table-cell">Satuan</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right">Aksi</TableHead>
@@ -325,7 +398,7 @@ const KelolaBarang = () => {
                 <TableBody>
                   {paginatedProducts.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center py-10 text-muted-foreground">
+                      <TableCell colSpan={7} className="text-center py-10 text-muted-foreground">
                         {products.length === 0
                           ? 'Belum ada barang. Klik "Tambah Barang" untuk memulai.'
                           : 'Tidak ada data barang ditemukan'}
@@ -337,6 +410,9 @@ const KelolaBarang = () => {
                         <TableCell className="font-medium">{product.kode}</TableCell>
                         <TableCell>{product.nama}</TableCell>
                         <TableCell className="hidden md:table-cell">{product.kategori}</TableCell>
+                        <TableCell className="hidden lg:table-cell">
+                          {product.supplier || <span className="text-muted-foreground">-</span>}
+                        </TableCell>
                         <TableCell className="hidden sm:table-cell">{product.satuan}</TableCell>
                         <TableCell>
                           <Badge variant={product.status === 'Aktif' ? 'default' : 'secondary'}>
@@ -360,32 +436,13 @@ const KelolaBarang = () => {
               </Table>
             </div>
 
-            {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="flex items-center justify-between mt-4">
-                <p className="text-sm text-muted-foreground">
-                  Menampilkan {(currentPage - 1) * itemsPerPage + 1} - {Math.min(currentPage * itemsPerPage, filteredProducts.length)} dari {filteredProducts.length} data
-                </p>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                    disabled={currentPage === 1}
-                  >
-                    Prev
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                    disabled={currentPage === totalPages}
-                  >
-                    Next
-                  </Button>
-                </div>
-              </div>
-            )}
+            <PaginationBar
+              page={currentPage}
+              totalPages={totalPages}
+              total={filteredProducts.length}
+              perPage={ITEMS_PER_PAGE}
+              onPageChange={setPage}
+            />
           </CardContent>
         </Card>
 
@@ -399,6 +456,9 @@ const KelolaBarang = () => {
             <ProductForm
               formData={formData}
               setFormData={setFormData}
+              categories={categories}
+              units={unitOptions}
+              suppliers={suppliers}
               onSubmit={handleEdit}
               onCancel={() => { resetForm(); setIsEditDialogOpen(false); setEditingProduct(null); }}
               submitLabel="Simpan"

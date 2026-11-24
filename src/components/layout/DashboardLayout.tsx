@@ -5,7 +5,7 @@ import { useData } from '@/contexts/DataContext';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { LayoutDashboard, Package, ArrowDownToLine, ArrowUpFromLine, Boxes, FileText, History, Users, LogOut, Menu, X } from 'lucide-react';
+import { LayoutDashboard, Package, ArrowDownToLine, ArrowUpFromLine, Boxes, FileText, History, Users, LogOut, Menu, X, Truck, Tag, Ruler } from 'lucide-react';
 import logoIcon from '@/assets/logo-hiro-icon.png';
 
 interface MenuItem {
@@ -24,6 +24,21 @@ const menuItems: MenuItem[] = [{
   icon: Package,
   label: 'Kelola Data Barang',
   path: '/kelola-barang',
+  roles: ['admin']
+}, {
+   icon: Truck,
+  label: 'Supplier',
+  path: '/supplier',
+  roles: ['admin']
+}, {
+  icon: Tag,
+  label: 'Kategori Produk',
+  path: '/kategori',
+  roles: ['admin']
+}, {
+  icon: Ruler,
+  label: 'Unit Satuan',
+  path: '/unit',
   roles: ['admin']
 }, {
   icon: ArrowDownToLine,

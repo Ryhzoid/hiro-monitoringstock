@@ -13,12 +13,44 @@ export interface User {
   status: 'Aktif' | 'Nonaktif';
 }
 
+export interface Category {
+  id: string;
+  nama: string;
+  kode: string;         // kode SKU kategori ('' jika tidak diisi)
+  deskripsi: string;
+  jumlahProduk: number; // dihitung dari daftar barang
+}
+
+export interface Supplier {
+  id: string;
+  nama: string;
+  npwp: string;
+  contactPerson: string;
+  telepon: string;
+  email: string;
+  alamat: string;
+  jumlahProduk: number;     // barang yang memakai supplier ini
+  jumlahTransaksi: number;  // transaksi (yang tidak dibatalkan) atas barang supplier ini
+}
+
+export interface Unit {
+  id: string;
+  nama: string;       // contoh: Pieces
+  singkatan: string;  // contoh: Pcs
+  aktif: boolean;
+  jumlahProduk: number;
+}
+
 export interface Product {
   id: string;
   kode: string;
   nama: string;
-  kategori: string;
-  satuan: 'PCS' | 'BOX' | 'UNIT';
+  kategori: string;     // nama kategori
+  categoryId: string;
+  satuan: string;       // singkatan unit, contoh: Pcs
+  unitId: string;
+  supplier: string;     // nama supplier/merk ('' jika tanpa supplier)
+  supplierId: string;   // '' jika tanpa supplier
   status: 'Aktif' | 'Tidak Aktif';
   // stokAwal selalu 0 (stok dicatat lewat transaksi Barang Masuk);
   // dipertahankan agar getStokAkhir dan halaman lama tetap berfungsi.
@@ -37,6 +69,12 @@ export interface Transaction {
   keterangan: string;
   userInput: string;
   batchAllocations?: { batchId: string; jumlah: number }[];
+  // Pembatalan (koreksi): transaksi tidak dihapus, hanya ditandai dibatalkan.
+  dbId?: number; // id numerik di database, dipakai untuk membatalkan
+  dibatalkan?: boolean;
+  alasanPembatalan?: string;
+  dibatalkanOleh?: string;
+  dibatalkanPada?: string;
 }
 
 export interface StockBatch {
@@ -46,9 +84,6 @@ export interface StockBatch {
   jumlahAwal: number;
   sisa: number;
 }
-
-// Harus sama dengan isi tabel categories di database.
-export const categories = ['Indoor Lighting', 'Outdoor Lighting', 'Industrial Lighting'];
 
 export const getStokAkhir = (product: Product) => {
   return product.stokAwal + product.totalMasuk - product.totalKeluar;

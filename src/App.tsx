@@ -14,6 +14,9 @@ import StokBarang from "./pages/StokBarang";
 import RiwayatTransaksi from "./pages/RiwayatTransaksi";
 import ExportLaporan from "./pages/ExportLaporan";
 import KelolaPengguna from "./pages/KelolaPengguna";
+import Supplier from "./pages/Supplier";
+import Kategori from "./pages/Kategori";
+import UnitSatuan from "./pages/UnitSatuan";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -70,6 +73,10 @@ const AppRoutes = () => {
       <Route path="/riwayat-transaksi" element={<ProtectedRoute allowedRoles={['manajer']}><RiwayatTransaksi /></ProtectedRoute>} />
       <Route path="/export-laporan" element={<ProtectedRoute><ExportLaporan /></ProtectedRoute>} />
       <Route path="/kelola-pengguna" element={<ProtectedRoute allowedRoles={['manajer']}><KelolaPengguna /></ProtectedRoute>} />
+      <Route path="/supplier" element={<ProtectedRoute allowedRoles={['admin']}><Supplier /></ProtectedRoute>} />
+      <Route path="/supplier" element={<ProtectedRoute allowedRoles={['admin']}><Supplier /></ProtectedRoute>} />
+      <Route path="/kategori" element={<ProtectedRoute allowedRoles={['admin']}><Kategori /></ProtectedRoute>} />
+      <Route path="/unit" element={<ProtectedRoute allowedRoles={['admin']}><UnitSatuan /></ProtectedRoute>} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   );
